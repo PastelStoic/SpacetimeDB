@@ -290,7 +290,7 @@ Main();
         run_cmd("dotnet", "new", "console", "--name", "QuickstartChatClient", "--output", path, capture_stderr=True)
 
     def sdk_setup(self, path: Path):
-        _dotnet_add_package(STDB_DIR/"sdks/csharp", "SpacetimeDB.BSATN.Runtime", (STDB_DIR / "crates/bindings-csharp/BSATN.Runtime").absolute(), "bin/Relese")
+        _dotnet_add_package(STDB_DIR/"sdks/csharp", "SpacetimeDB.BSATN.Runtime", (STDB_DIR / "crates/bindings-csharp/BSATN.Runtime").absolute(), "bin/Release")
         _dotnet_add_package(path, "SpacetimeDB.ClientSDK", (STDB_DIR / "sdks/csharp").absolute(), "bin~/Release")
 
     def server_postprocess(self, server_path: Path):
