@@ -50,6 +50,7 @@ def _dotnet_add_package(project_path: Path, package_name: str, source_path: Path
     # Is the source already added?
     if package_name in sources:
         run_cmd("dotnet", "nuget", "remove", "source", package_name, cwd=project_path, capture_stderr=True)
+    run_cmd("dotnet", "pack", cwd=source_path)
     run_cmd("dotnet", "nuget", "add", "source", source_path, "--name", package_name, cwd=project_path,
             capture_stderr=True)
     run_cmd("dotnet", "add", "package", package_name, cwd=project_path, capture_stderr=True)
