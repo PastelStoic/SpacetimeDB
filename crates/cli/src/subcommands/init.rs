@@ -144,11 +144,6 @@ pub fn cli() -> clap::Command {
                 .help("Template ID or GitHub repository (owner/repo or URL)"),
         )
         .arg(
-            Arg::new("client-lang").long("client-lang").value_name("LANG").help(
-                "Client language: rust, csharp, typescript (it can only be used when --template is not specified)",
-            ),
-        )
-        .arg(
             Arg::new("local")
                 .long("local")
                 .action(clap::ArgAction::SetTrue)
@@ -433,10 +428,9 @@ async fn get_template_config_non_interactive(
 
     // No template - require at least one language option
     let server_lang_str = args.get_one::<String>("server-lang").cloned();
-    let client_lang_str = args.get_one::<String>("client-lang").cloned();
 
-    if server_lang_str.is_none() && client_lang_str.is_none() {
-        anyhow::bail!("Either --template, --server-lang, or --client-lang must be provided in non-interactive mode");
+    if server_lang_str.is_none() {
+        anyhow::bail!("Either --template or --server-lang must be provided in non-interactive mode");
     }
 
     Ok(TemplateConfig {
@@ -444,7 +438,7 @@ async fn get_template_config_non_interactive(
         project_path,
         template_type: TemplateType::Empty,
         server_lang: parse_server_lang(&server_lang_str)?,
-        client_lang: parse_client_lang(&client_lang_str)?,
+        client_lang: None,
         github_repo: None,
         template_def: None,
         use_local: true,
@@ -487,20 +481,11 @@ async fn get_template_config_interactive(
         return create_template_config_from_template_str(project_name, project_path, template_str, &templates);
     }
 
-    // Check if server-lang or client-lang is provided
     let server_lang_arg = args.get_one::<String>("server-lang");
-    let client_lang_arg = args.get_one::<String>("client-lang");
-
-    if server_lang_arg.is_some() || client_lang_arg.is_some() {
-        // Use provided languages
+    if server_lang_arg.is_some() {
         let server_lang = parse_server_lang(&server_lang_arg.cloned())?;
         if let Some(lang_str) = server_lang_arg {
             println!("{} {}", "Server language:".bold(), lang_str);
-        }
-
-        let client_lang = parse_client_lang(&client_lang_arg.cloned())?;
-        if let Some(lang_str) = client_lang_arg {
-            println!("{} {}", "Client language:".bold(), lang_str);
         }
 
         return Ok(TemplateConfig {
@@ -508,7 +493,7 @@ async fn get_template_config_interactive(
             project_path,
             template_type: TemplateType::Empty,
             server_lang,
-            client_lang,
+            client_lang: None,
             github_repo: None,
             template_def: None,
             use_local: true,
@@ -529,6 +514,7 @@ async fn get_template_config_interactive(
         })
         .collect();
     client_choices.push("other".to_string());
+    client_choices.push("none".to_string());
 
     let client_selection = Select::with_theme(&theme)
         .with_prompt("Select client")
@@ -537,6 +523,7 @@ async fn get_template_config_interactive(
         .interact()?;
 
     let other_index = highlights.len();
+    let none_index = highlights.len() + 1;
 
     if client_selection < highlights.len() {
         let highlight = &highlights[client_selection];
@@ -579,6 +566,32 @@ async fn get_template_config_interactive(
                 &templates,
             );
         }
+    } else if client_selection == none_index {
+        // Ask for server language only
+        let server_lang_choices = vec!["Rust", "C#", "TypeScript"];
+        let server_selection = Select::with_theme(&theme)
+            .with_prompt("Select server language")
+            .items(&server_lang_choices)
+            .default(0)
+            .interact()?;
+
+        let server_lang = match server_selection {
+            0 => Some(ServerLanguage::Rust),
+            1 => Some(ServerLanguage::Csharp),
+            2 => Some(ServerLanguage::TypeScript),
+            _ => unreachable!("Invalid server language selection"),
+        };
+
+        Ok(TemplateConfig {
+            project_name,
+            project_path,
+            template_type: TemplateType::Empty,
+            server_lang,
+            client_lang: None,
+            github_repo: None,
+            template_def: None,
+            use_local: true,
+        })
     } else {
         unreachable!("Invalid selection index")
     }
@@ -647,27 +660,6 @@ fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
             fs::copy(&src_path, &dst_path)?;
         }
     }
-    Ok(())
-}
-
-fn create_root_package_json(root: &Path, project_name: &str, _use_local: bool) -> anyhow::Result<()> {
-    let package_json = json!({
-        "name": project_name,
-        "version": "0.1.0",
-        "private": true,
-        "scripts": {
-            "dev": "cd client && npm run dev",
-            "build": "cd spacetimedb && spacetime build && cd ../client && npm run build",
-            "deploy": format!("npm run build && spacetime publish --project-path spacetimedb --server maincloud {} && spacetime generate --project-path spacetimedb --lang typescript --out-dir client/src/module_bindings", project_name),
-            "local": format!("npm run build && spacetime publish --project-path spacetimedb --server local {} --yes && spacetime generate --project-path spacetimedb --lang typescript --out-dir client/src/module_bindings", project_name)
-        },
-        "workspaces": ["client"]
-    });
-
-    let package_path = root.join("package.json");
-    let content = serde_json::to_string_pretty(&package_json)?;
-    fs::write(package_path, content)?;
-
     Ok(())
 }
 
@@ -767,10 +759,9 @@ pub async fn init_from_template(config: &TemplateConfig, project_path: &Path) ->
         TemplateType::Empty => init_empty(config, project_path)?,
     }
 
-    if let Some(cursorrules_content) = embedded::get_cursorrules() {
-        let cursorrules_path = project_path.join(".cursorrules");
-        fs::write(cursorrules_path, cursorrules_content)?;
-    }
+    let cursorrules_content = embedded::get_cursorrules();
+    let cursorrules_path = project_path.join(".cursorrules");
+    fs::write(cursorrules_path, cursorrules_content)?;
 
     println!("{}", "Project initialized successfully!".green());
     print_next_steps(config, project_path)?;
@@ -874,28 +865,6 @@ fn init_empty(config: &TemplateConfig, project_path: &Path) -> anyhow::Result<()
             let server_dir = project_path.join("spacetimedb");
             init_empty_typescript_server(&server_dir, &config.project_name)?;
         }
-        None => {}
-    }
-
-    match config.client_lang {
-        Some(ClientLanguage::TypeScript) => {
-            println!("Setting up TypeScript client...");
-            let client_dir = project_path.join("client");
-            init_empty_typescript_client(&client_dir)?;
-
-            update_client_package_json(&client_dir, &config.project_name)?;
-
-            if config.server_lang.is_some() {
-                create_root_package_json(project_path, &config.project_name, config.use_local)?;
-            }
-
-            println!(
-                "{}",
-                "Note: Run 'npm install' in the project directory to install dependencies".yellow()
-            );
-        }
-        Some(ClientLanguage::Rust) => {}
-        Some(ClientLanguage::Csharp) => {}
         None => {}
     }
 
@@ -1085,14 +1054,11 @@ pub async fn exec(mut config: Config, args: &ArgMatches) -> anyhow::Result<()> {
     let is_interactive = !args.get_flag("non-interactive");
     let template = args.get_one::<String>("template");
     let server_lang = args.get_one::<String>("server-lang");
-    let client_lang = args.get_one::<String>("client-lang");
     let name = args.get_one::<String>("name");
 
-    // Validate that template and language options are not used together
-    if template.is_some() && (server_lang.is_some() || client_lang.is_some()) {
-        anyhow::bail!(
-            "Cannot specify both --template and --server-lang/--client-lang. Language is determined by the template."
-        );
+    // Validate that template and server-lang options are not used together
+    if template.is_some() && server_lang.is_some() {
+        anyhow::bail!("Cannot specify both --template and --server-lang. Language is determined by the template.");
     }
 
     if !is_interactive {
@@ -1100,10 +1066,8 @@ pub async fn exec(mut config: Config, args: &ArgMatches) -> anyhow::Result<()> {
         if name.is_none() {
             anyhow::bail!("--name is required in non-interactive mode");
         }
-        if template.is_none() && server_lang.is_none() && client_lang.is_none() {
-            anyhow::bail!(
-                "Either --template, --server-lang, or --client-lang must be provided in non-interactive mode"
-            );
+        if template.is_none() && server_lang.is_none() {
+            anyhow::bail!("Either --template or --server-lang must be provided in non-interactive mode");
         }
     }
 
@@ -1195,43 +1159,6 @@ pub fn init_typescript_project(project_path: &Path) -> anyhow::Result<()> {
 
     for data_file in export_files {
         let path = project_path.join(data_file.1);
-        create_directory(path.parent().unwrap())?;
-        std::fs::write(path, data_file.0)?;
-    }
-
-    Ok(())
-}
-
-fn init_empty_typescript_client(client_dir: &Path) -> anyhow::Result<()> {
-    let export_files = vec![
-        (
-            include_str!("../../../bindings-typescript/examples/empty/.gitignore"),
-            ".gitignore",
-        ),
-        (
-            include_str!("../../../bindings-typescript/examples/empty/index.html"),
-            "index.html",
-        ),
-        (
-            include_str!("../../../bindings-typescript/examples/empty/package.json"),
-            "package.json",
-        ),
-        (
-            include_str!("../../../bindings-typescript/examples/empty/src/main.ts"),
-            "src/main.ts",
-        ),
-        (
-            include_str!("../../../bindings-typescript/examples/empty/tsconfig.json"),
-            "tsconfig.json",
-        ),
-        (
-            include_str!("../../../bindings-typescript/examples/empty/vite.config.ts"),
-            "vite.config.ts",
-        ),
-    ];
-
-    for data_file in export_files {
-        let path = client_dir.join(data_file.1);
         create_directory(path.parent().unwrap())?;
         std::fs::write(path, data_file.0)?;
     }
